@@ -1,0 +1,208 @@
+---
+title: "Stats C183 Project 6 - Output File"
+author: 'Eli Radparvar UID: 206097071'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 7, fig.height = 4.5)
+options(width = 75)
+library(ggplot2)
+library(knitr)
+```
+
+### A
+
+```{r index-ranking}
+a <- read.csv("../../data/stockData.csv", check.names = FALSE)
+a$Date <- as.Date(a$Date)
+a <- a[a$Date >= as.Date("2018-01-01") &
+         a$Date < as.Date("2023-01-01"), ]
+stocks <- setdiff(names(a), c("Date", "^GSPC"))
+prices <- as.matrix(a[, c("^GSPC", stocks)])
+r <- prices[-1, ] / prices[-nrow(prices), ] - 1
+market <- r[, "^GSPC"]
+alpha <- beta <- residual_var <- numeric(30)
+for (i in seq_along(stocks)) {
+  fit <- lm(r[, stocks[i]] ~ market)
+  alpha[i] <- coef(fit)[1]
+  beta[i] <- coef(fit)[2]
+  residual_var[i] <- summary(fit)$sigma^2
+}
+keep <- beta > 0
+stocks <- stocks[keep]
+alpha <- alpha[keep]
+beta <- beta[keep]
+residual_var <- residual_var[keep]
+mu <- alpha + beta * mean(market)
+Rf <- 0.001
+
+index_table <- data.frame(
+  Stock = stocks, Alpha = alpha, Beta = beta, Mean = mu,
+  Residual_var = residual_var, Ratio = (mu - Rf) / beta
+)
+index_table <- index_table[order(-index_table$Ratio), ]
+index_table$Col1 <- with(index_table,
+                         (Mean - Rf) * Beta / Residual_var)
+index_table$Col2 <- cumsum(index_table$Col1)
+index_table$Col3 <- with(index_table, Beta^2 / Residual_var)
+index_table$Col4 <- cumsum(index_table$Col3)
+index_table$Ci <- var(market) * index_table$Col2 /
+  (1 + var(market) * index_table$Col4)
+kable(index_table[, 1:6], digits = 6, row.names = FALSE)
+kable(index_table[, c(1, 7:11)], digits = 6, row.names = FALSE)
+```
+
+### B
+
+```{r index-portfolios}
+C_short <- tail(index_table$Ci, 1)
+z_short <- with(index_table,
+                Beta / Residual_var * (Ratio - C_short))
+w_short <- z_short / sum(z_short)
+w_index_short <- w_short[match(stocks, index_table$Stock)]
+
+index_weights <- function(rf, means) {
+  ratio <- (means - rf) / beta
+  o <- order(-ratio)
+  Ci <- var(market) * cumsum((means[o] - rf) * beta[o] /
+                              residual_var[o]) /
+    (1 + var(market) * cumsum(beta[o]^2 / residual_var[o]))
+  z <- beta / residual_var * pmax(ratio - max(Ci), 0)
+  z / sum(z)
+}
+w_index_no_short <- index_weights(Rf, mu)
+Sigma_index <- outer(beta, beta) * var(market) + diag(residual_var)
+Sigma_hist <- cov(r[, stocks])
+
+kable(data.frame(Stock = stocks, Short = w_index_short,
+                 No_short = w_index_no_short),
+      digits = 6, row.names = FALSE)
+portfolios_b <- data.frame(
+  Portfolio = c("Short sales allowed", "No short sales"),
+  Mean = c(sum(w_index_short * mu), sum(w_index_no_short * mu)),
+  SD = c(sqrt(drop(t(w_index_short) %*% Sigma_index %*%
+                     w_index_short)),
+         sqrt(drop(t(w_index_no_short) %*% Sigma_index %*%
+                     w_index_no_short)))
+)
+kable(portfolios_b, digits = 6, row.names = FALSE)
+```
+
+```{r index-plot}
+frontier <- function(Sigma, model) {
+  u <- solve(Sigma, mu)
+  v <- solve(Sigma, rep(1, length(mu)))
+  A <- sum(u)
+  B <- sum(mu * u)
+  C <- sum(v)
+  D <- B * C - A^2
+  sd_grid <- seq(sqrt(1 / C),
+                 1.05 * max(sqrt(diag(cov(r)))), length.out = 500)
+  data.frame(SD = sd_grid,
+             Mean = A / C + sqrt((D / C) *
+                                  pmax(sd_grid^2 - 1 / C, 0)),
+             Model = model)
+}
+assets <- data.frame(Asset = colnames(r), Mean = colMeans(r),
+                     SD = sqrt(diag(cov(r))))
+p_base <- ggplot(assets, aes(x = 100 * SD, y = 100 * Mean)) +
+  geom_point(size = 1) +
+  geom_text(aes(label = Asset), vjust = -0.7, size = 2.3,
+            check_overlap = TRUE) +
+  scale_color_manual(values = c(Historical = "grey50",
+                                "Single index" = "blue",
+                                "Constant correlation" = "red")) +
+  labs(x = "Monthly standard deviation (%)",
+       y = "Mean monthly return (%)") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+curves_b <- rbind(frontier(Sigma_hist, "Historical"),
+                  frontier(Sigma_index, "Single index"))
+p_base +
+  geom_path(data = curves_b, aes(color = Model)) +
+  geom_point(data = portfolios_b, aes(shape = Portfolio), size = 3) +
+  coord_cartesian(ylim = c(-0.5,
+                           115 * max(assets$Mean, portfolios_b$Mean)))
+```
+
+### C
+
+```{r no-short-frontier}
+Rf_grid <- c(seq(-1, -0.05, length.out = 100),
+             seq(-0.05, max(mu) - 0.000001, length.out = 500))
+# With equal means, the tangency portfolio minimizes variance.
+w_min <- index_weights(0, rep(1, length(mu)))
+no_short <- data.frame(
+  Mean = sum(w_min * mu),
+  SD = sqrt(drop(t(w_min) %*% Sigma_index %*% w_min))
+)
+for (rf in Rf_grid) {
+  w <- index_weights(rf, mu)
+  no_short <- rbind(no_short, data.frame(
+    Mean = sum(w * mu),
+    SD = sqrt(drop(t(w) %*% Sigma_index %*% w))
+  ))
+}
+ggplot(no_short, aes(x = 100 * SD, y = 100 * Mean)) +
+  geom_path() +
+  labs(x = "Monthly standard deviation (%)",
+       y = "Mean monthly return (%)") +
+  theme_minimal()
+```
+
+### D
+
+```{r correlation-ranking}
+stock_returns <- r[, stocks]
+s <- apply(stock_returns, 2, sd)
+correlations <- cor(stock_returns)
+rho <- mean(correlations[upper.tri(correlations)])
+kable(data.frame(Rf, rho), digits = 6)
+
+rho_table <- data.frame(Stock = stocks, Mean = mu, Excess = mu - Rf,
+                        SD = s, Ratio = (mu - Rf) / s)
+rho_table <- rho_table[order(-rho_table$Ratio), ]
+rho_table$Col1 <- rho / (1 - rho + seq_along(stocks) * rho)
+rho_table$Col2 <- cumsum(rho_table$Ratio)
+rho_table$Ci <- rho_table$Col1 * rho_table$Col2
+kable(rho_table, digits = 6, row.names = FALSE)
+```
+
+### E
+
+```{r correlation-portfolios}
+C_rho_short <- tail(rho_table$Ci, 1)
+C_rho_no_short <- max(rho_table$Ci)
+z_rho_short <- with(rho_table,
+                    (Ratio - C_rho_short) / ((1 - rho) * SD))
+z_rho_no_short <- with(rho_table,
+                       pmax(Ratio - C_rho_no_short, 0) /
+                         ((1 - rho) * SD))
+w_rho_short <- z_rho_short / sum(z_rho_short)
+w_rho_no_short <- z_rho_no_short / sum(z_rho_no_short)
+o <- match(stocks, rho_table$Stock)
+w_rho_short <- w_rho_short[o]
+w_rho_no_short <- w_rho_no_short[o]
+Sigma_rho <- rho * outer(s, s) + diag((1 - rho) * s^2)
+
+kable(data.frame(Stock = stocks, Short = w_rho_short,
+                 No_short = w_rho_no_short),
+      digits = 6, row.names = FALSE)
+portfolios_e <- data.frame(
+  Portfolio = c("Short sales allowed", "No short sales"),
+  Mean = c(sum(w_rho_short * mu), sum(w_rho_no_short * mu)),
+  SD = c(sqrt(drop(t(w_rho_short) %*% Sigma_rho %*% w_rho_short)),
+         sqrt(drop(t(w_rho_no_short) %*% Sigma_rho %*%
+                     w_rho_no_short)))
+)
+kable(portfolios_e, digits = 6, row.names = FALSE)
+curves_e <- rbind(frontier(Sigma_hist, "Historical"),
+                  frontier(Sigma_rho, "Constant correlation"))
+p_base +
+  geom_path(data = curves_e, aes(color = Model)) +
+  geom_point(data = portfolios_e, aes(shape = Portfolio), size = 3) +
+  coord_cartesian(ylim = c(-0.5,
+                           115 * max(assets$Mean, portfolios_e$Mean)))
+```

@@ -1,0 +1,254 @@
+---
+title: "Stats C183 Project 7 - Output File"
+author: 'Eli Radparvar UID: 206097071'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 7, fig.height = 4.5)
+library(ggplot2)
+library(knitr)
+```
+
+### A
+
+```{r multigroup-portfolio}
+a <- read.csv("../../data/stockData.csv", check.names = FALSE)
+a$Date <- as.Date(a$Date)
+tickers <- setdiff(names(a), "Date")
+stocks <- setdiff(tickers, "^GSPC")
+prices <- as.matrix(a[, tickers])
+r <- prices[-1, ] / prices[-nrow(prices), ] - 1
+dates <- a$Date[-1]
+train <- r[dates < as.Date("2023-01-01"), stocks]
+market <- r[dates < as.Date("2023-01-01"), "^GSPC"]
+mu <- colMeans(train)
+Sigma <- cov(train)
+s <- sqrt(diag(Sigma))
+Rf <- 0.001
+
+groups <- c("Technology", "Healthcare", "Financials",
+            "Industrials", "Consumer staples")
+group <- rep(groups, each = 6)
+stock_cor <- cor(train)
+rho_group <- matrix(0, 5, 5, dimnames = list(groups, groups))
+for (g in groups) {
+  for (h in groups) {
+    block <- stock_cor[group == g, group == h]
+    rho_group[g, h] <- if (g == h) {
+      mean(block[upper.tri(block)])
+    } else {
+      mean(block)
+    }
+  }
+}
+group_cor <- rho_group[group, group]
+diag(group_cor) <- 1
+Sigma_group <- group_cor * outer(s, s)
+
+tangency <- function(S) {
+  z <- solve(S, mu - Rf)
+  z / sum(z)
+}
+risk <- function(W, S) sqrt(colSums(W * (S %*% W)))
+w_group <- tangency(Sigma_group)
+kable(rho_group, digits = 4)
+kable(data.frame(Stock = stocks, Group = group, Weight = w_group),
+      digits = 6, row.names = FALSE)
+kable(data.frame(Mean = sum(w_group * mu),
+                 SD = risk(w_group, Sigma_group)), digits = 6)
+```
+
+```{r previous-portfolios}
+# Historical covariance portfolios from Projects 1 and 2.
+one <- rep(1, length(stocks))
+u <- solve(Sigma, mu)
+v <- solve(Sigma, one)
+A <- sum(u)
+B <- sum(mu * u)
+C <- sum(v)
+D <- B * C - A^2
+target <- function(E) ((C * E - A) * u + (B - A * E) * v) / D
+
+W_hist <- cbind("Equal weight" = one / sum(one),
+                "Historical min" = v / C,
+                "Target 1.5%" = target(0.015),
+                "Target 2.0%" = target(0.020),
+                "P1 Tech" = (group == "Technology") / 6,
+                "P2 Health" = (group == "Healthcare") / 6,
+                "P3 Industrials" = (group == "Industrials") / 6)
+
+# Single-index and constant-correlation portfolios from Projects 5 and 6.
+fit <- lm(train ~ market)
+beta <- coef(fit)[2, ]
+residual_var <- colSums(residuals(fit)^2) / df.residual(fit)
+market_var <- var(market)
+Sigma_sim <- market_var * outer(beta, beta) + diag(residual_var)
+rho <- mean(stock_cor[upper.tri(stock_cor)])
+cc_residual <- (1 - rho) * s^2
+Sigma_cc <- rho * outer(s, s) + diag(cc_residual)
+
+long_only <- function(excess, loading, residual, factor_var) {
+  ratio <- excess / loading
+  o <- order(-ratio)
+  Ci <- factor_var * cumsum(excess[o] * loading[o] / residual[o]) /
+    (1 + factor_var * cumsum(loading[o]^2 / residual[o]))
+  z <- loading / residual * pmax(ratio - max(Ci), 0)
+  z / sum(z)
+}
+W_sim <- cbind("SIM short" = tangency(Sigma_sim),
+               "SIM no short" = long_only(mu - Rf, beta, residual_var,
+                                          market_var),
+               "SIM no-short min" = long_only(one, beta, residual_var,
+                                              market_var))
+W_cc <- cbind("CC short" = tangency(Sigma_cc),
+              "CC no short" = long_only(mu - Rf, s, cc_residual, rho))
+W <- cbind(W_hist, W_sim, W_cc, Multigroup = w_group)
+```
+
+```{r training-plot}
+assets <- data.frame(Stock = c(stocks, "^GSPC"),
+                     Mean = c(mu, mean(market)), SD = c(s, sd(market)))
+portfolios <- data.frame(
+  Mean = drop(crossprod(W, mu)),
+  SD = c(risk(W_hist, Sigma), risk(W_sim, Sigma_sim),
+         risk(W_cc, Sigma_cc), risk(w_group, Sigma_group)),
+  Portfolio = ifelse(colnames(W) == "Multigroup", "Multigroup", "Previous")
+)
+
+frontier <- function(S, model) {
+  x <- solve(S, mu)
+  y <- solve(S, one)
+  a <- sum(x)
+  b <- sum(mu * x)
+  c <- sum(y)
+  d <- b * c - a^2
+  sd <- seq(sqrt(1 / c), 1.05 * max(assets$SD), length.out = 500)
+  data.frame(Mean = a / c + sqrt(d / c * pmax(sd^2 - 1 / c, 0)),
+             SD = sd, Model = model)
+}
+curves <- rbind(frontier(Sigma, "Historical"),
+                frontier(Sigma_sim, "Single index"),
+                frontier(Sigma_cc, "Constant correlation"))
+ggplot(assets, aes(x = 100 * SD, y = 100 * Mean)) +
+  geom_line(data = curves, aes(color = Model)) +
+  geom_point(size = 1) +
+  geom_text(aes(label = Stock), size = 2.3, vjust = -0.7,
+            check_overlap = TRUE) +
+  geom_point(data = portfolios, aes(shape = Portfolio), size = 2.8) +
+  scale_shape_manual(values = c(Multigroup = 18, Previous = 17)) +
+  coord_cartesian(ylim = c(0, 115 * max(assets$Mean, portfolios$Mean))) +
+  labs(x = "Monthly standard deviation (%)", y = "Mean monthly return (%)") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+### B.1
+
+The portfolios are rebalanced monthly to their training weights. December 2022
+closing prices are the starting values for January 2023 returns. The separate
+Project 3 dataset ends in 2003.
+
+```{r testing-performance}
+test <- dates >= as.Date("2023-01-01") & dates <= as.Date("2026-09-30")
+market_test <- r[test, "^GSPC"]
+returns <- cbind(r[test, stocks] %*% W, "S&P 500" = market_test)
+wealth <- rbind(1, apply(1 + returns, 2, cumprod))
+plot_dates <- c(as.Date("2022-12-31"),
+                seq(as.Date("2023-02-01"), as.Date("2026-10-01"),
+                    by = "month") - 1)
+
+growth_plot <- function(names, title) {
+  df <- data.frame(Date = rep(plot_dates, length(names)),
+                   Wealth = as.vector(wealth[, names]),
+                   Portfolio = rep(names, each = nrow(wealth)))
+  ggplot(df, aes(Date, Wealth, color = Portfolio)) +
+    geom_line(linewidth = 0.65) +
+    labs(title = title, x = NULL, y = "Growth of $1") +
+    theme_minimal() +
+    theme(legend.position = "bottom") +
+    guides(color = guide_legend(nrow = 2))
+}
+growth_plot(c(colnames(W_hist), "S&P 500"), "Allocation and target portfolios")
+growth_plot(c(colnames(W_sim), colnames(W_cc), "Multigroup", "S&P 500"),
+            "Model portfolios")
+```
+
+### B.2
+
+```{r geometric-growth}
+geo <- wealth[nrow(wealth), ]^(1 / nrow(returns)) - 1
+kable(data.frame(Portfolio = colnames(returns),
+                 Monthly_growth_pct = 100 * geo),
+      digits = 4, row.names = FALSE)
+```
+
+\newpage
+
+### B.3
+
+```{r performance-measures}
+mean_test <- colMeans(returns)
+sd_test <- apply(returns, 2, sd)
+beta_test <- drop(cov(returns, market_test)) / var(market_test)
+premium <- mean(market_test) - Rf
+excess <- mean_test - Rf
+
+sharpe <- excess / sd_test
+# Compare with the market scaled to the portfolio's total risk.
+differential <- excess - (sd_test / sd(market_test)) * premium
+treynor <- excess / beta_test
+jensen <- excess - beta_test * premium
+
+kable(data.frame(Portfolio = colnames(returns), Sharpe = sharpe,
+                 Differential_pct = 100 * differential,
+                 Treynor_pct = 100 * treynor, Jensen_pct = 100 * jensen),
+      digits = 4, row.names = FALSE)
+```
+
+### B.4
+
+```{r fama-decomposition}
+p <- "SIM no short"
+beta_p <- beta_test[p]
+beta_sd <- sd_test[p] / sd(market_test)
+mean_p <- mean_test[p]
+mean_beta <- Rf + beta_p * premium
+mean_sd <- Rf + beta_sd * premium
+
+kable(data.frame(
+  Component = c("Market risk", "Diversification", "Net selectivity",
+                "Total excess return"),
+  Monthly_pct = 100 * c(mean_beta - Rf, mean_sd - mean_beta,
+                        mean_p - mean_sd, mean_p - Rf)
+), digits = 4, row.names = FALSE)
+
+points <- data.frame(Beta = c(0, beta_p, beta_p, beta_sd),
+                     Return = c(Rf, mean_p, mean_beta, mean_sd),
+                     Label = c("Risk-free", "Portfolio", "Same beta", "Same SD"))
+gaps <- data.frame(Beta = c(beta_p, beta_sd, beta_p),
+                   Start = c(Rf, mean_beta, mean_sd),
+                   End = c(mean_beta, mean_sd, mean_p),
+                   Component = c("Market risk", "Diversification",
+                                 "Net selectivity"))
+
+ggplot(points, aes(Beta, 100 * Return)) +
+  geom_abline(intercept = 100 * Rf, slope = 100 * premium) +
+  annotate("segment", x = 0, xend = beta_p,
+           y = 100 * Rf, yend = 100 * Rf, linetype = "dashed") +
+  annotate("segment", x = beta_p, xend = beta_sd,
+           y = 100 * mean_beta, yend = 100 * mean_beta, linetype = "dashed") +
+  annotate("segment", x = beta_p, xend = beta_sd,
+           y = 100 * mean_sd, yend = 100 * mean_sd, linetype = "dashed") +
+  geom_segment(data = gaps,
+               aes(x = Beta, xend = Beta, y = 100 * Start, yend = 100 * End,
+                   color = Component), linewidth = 1.2, inherit.aes = FALSE) +
+  geom_point() +
+  geom_text(aes(label = Label), hjust = c(-0.15, 1.15, 1.15, -0.15),
+            size = 3) +
+  xlim(0, max(1, beta_sd) + 0.22) +
+  labs(x = "Beta", y = "Mean monthly return (%)") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```

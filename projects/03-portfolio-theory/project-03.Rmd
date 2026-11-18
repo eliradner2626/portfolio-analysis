@@ -1,0 +1,196 @@
+---
+title: "Stats C183 Project 3 - Output File"
+author: 'Eli Radparvar UID: 206097071'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 7, fig.height = 4.5)
+library(ggplot2)
+library(knitr)
+```
+
+### A
+
+```{r returns}
+a <- read.table("../../data/statc183c283_5stocks.txt", header = TRUE)
+a <- a[nrow(a):1, ]
+prices <- as.matrix(a[, -1])
+colnames(prices) <- c("Exxon-Mobil", "General Motors", "Hewlett-Packard",
+                      "McDonalds", "Boeing")
+r <- prices[-1, ] / prices[-nrow(prices), ] - 1
+```
+
+### B
+
+```{r statistics}
+means <- colMeans(r)
+covmat <- cov(r)
+kable(data.frame(Stock = names(means), Mean = means),
+      digits = 6, row.names = FALSE)
+kable(covmat, digits = 6)
+```
+
+### C
+
+```{r two-stock-minimum}
+stocks2 <- c("Exxon-Mobil", "Boeing")
+mu2 <- means[stocks2]
+Sigma2 <- covmat[stocks2, stocks2]
+z2 <- solve(Sigma2, rep(1, 2))
+w_min2 <- z2 / sum(z2)
+mean_min2 <- sum(w_min2 * mu2)
+sd_min2 <- sqrt(drop(t(w_min2) %*% Sigma2 %*% w_min2))
+kable(data.frame(Stock = stocks2, Weight = w_min2),
+      digits = 4, row.names = FALSE)
+kable(data.frame(Mean = mean_min2, SD = sd_min2), digits = 6)
+```
+
+### D
+
+```{r two-stock-curve}
+x1 <- seq(-2, 3, length.out = 1000)
+x2 <- 1 - x1
+curve2 <- data.frame(
+  Mean = x1 * mu2[1] + x2 * mu2[2],
+  SD = sqrt(x1^2 * Sigma2[1, 1] + x2^2 * Sigma2[2, 2] +
+              2 * x1 * x2 * Sigma2[1, 2])
+)
+curve2$Branch <- ifelse(curve2$Mean >= mean_min2,
+                        "Efficient", "Inefficient")
+ggplot(curve2, aes(x = 100 * SD, y = 100 * Mean)) +
+  geom_path(aes(linetype = Branch)) +
+  scale_linetype_manual(values = c(Efficient = "solid",
+                                  Inefficient = "dashed")) +
+  annotate("point", x = 100 * sd_min2, y = 100 * mean_min2,
+           shape = 17, size = 3) +
+  annotate("text", x = 100 * sd_min2, y = 100 * mean_min2,
+           label = "Minimum risk", hjust = -0.1, vjust = 1.5, size = 3) +
+  labs(x = "Monthly standard deviation (%)",
+       y = "Mean monthly return (%)", linetype = "Frontier") +
+  theme_minimal()
+```
+
+### E
+
+```{r three-stock-cloud}
+stocks3 <- c("Exxon-Mobil", "McDonalds", "Boeing")
+mu3 <- means[stocks3]
+Sigma3 <- covmat[stocks3, stocks3]
+combinations <- read.table("../../data/statc183c283_abc.txt", header = TRUE)
+W <- t(as.matrix(combinations))
+cloud <- data.frame(
+  Mean = drop(t(mu3) %*% W),
+  SD = sqrt(colSums(W * (Sigma3 %*% W)))
+)
+p_e <- ggplot(cloud, aes(x = 100 * SD, y = 100 * Mean)) +
+  geom_point(size = 0.7, alpha = 0.5) +
+  scale_x_continuous(limits = c(0, NA)) +
+  labs(x = "Monthly standard deviation (%)",
+       y = "Mean monthly return (%)") +
+  theme_minimal()
+p_e
+```
+
+### F
+
+```{r tangency}
+Rf <- 0.001
+excess <- mu3 - Rf
+z <- solve(Sigma3, excess)
+w_G <- z / sum(z)
+mean_G <- sum(w_G * mu3)
+var_G <- drop(t(w_G) %*% Sigma3 %*% w_G)
+sd_G <- sqrt(var_G)
+kable(data.frame(Stock = stocks3, Weight = w_G),
+      digits = 4, row.names = FALSE)
+kable(data.frame(Mean = mean_G, SD = sd_G), digits = 6)
+
+p_f <- p_e +
+  geom_abline(intercept = 100 * Rf,
+              slope = (mean_G - Rf) / sd_G, color = "red") +
+  annotate("point", x = 100 * sd_G, y = 100 * mean_G,
+           color = "red", size = 3) +
+  annotate("text", x = 100 * sd_G, y = 100 * mean_G,
+           label = "G", hjust = -0.5, vjust = -0.5, size = 3)
+p_f
+```
+
+### G
+
+```{r capital-allocation}
+E <- 0.6 * mean_G + 0.4 * Rf
+sd_mix <- 0.6 * sd_G
+kable(data.frame(Mean = E, SD = sd_mix), digits = 6)
+p_f +
+  annotate("point", x = 100 * sd_mix, y = 100 * E,
+           color = "blue", shape = 17, size = 3) +
+  annotate("text", x = 100 * sd_mix, y = 100 * E,
+           label = "60% G", hjust = 1.15, vjust = -0.7, size = 3)
+```
+
+### H
+
+```{r risky-weights}
+x <- (E - Rf) * z / sum(excess * z)
+kable(data.frame(Stock = stocks3, Weight = x),
+      digits = 4, row.names = FALSE)
+```
+
+These are the weights of the three risky stocks in the combined portfolio:
+\(x = 0.6w_G\). They sum to 0.6; the remaining 0.4 is invested in the risk-free asset.
+
+### I.1
+
+```{r two-tangent-portfolios}
+Rf1 <- 0.001
+Rf2 <- 0.002
+w_A <- w_G
+z_B <- solve(Sigma3, mu3 - Rf2)
+w_B <- z_B / sum(z_B)
+mean_A <- mean_G
+var_A <- var_G
+mean_B <- sum(w_B * mu3)
+var_B <- drop(t(w_B) %*% Sigma3 %*% w_B)
+kable(data.frame(Stock = stocks3, A = w_A, B = w_B),
+      digits = 4, row.names = FALSE)
+kable(data.frame(Portfolio = c("A", "B"),
+                 Mean = c(mean_A, mean_B),
+                 SD = sqrt(c(var_A, var_B))),
+      digits = 6, row.names = FALSE)
+```
+
+### I.2
+
+```{r portfolio-covariance}
+cov_AB <- drop(t(w_A) %*% Sigma3 %*% w_B)
+kable(data.frame(Covariance = cov_AB), digits = 6)
+```
+
+### I.3
+
+```{r two-portfolio-frontier}
+alpha_min <- (var_B - cov_AB) / (var_A + var_B - 2 * cov_AB)
+mean_min3 <- alpha_min * mean_A + (1 - alpha_min) * mean_B
+target_means <- seq(mean_min3, max(cloud$Mean), length.out = 1000)
+alpha <- (target_means - mean_B) / (mean_A - mean_B)
+frontier3 <- data.frame(
+  Mean = alpha * mean_A + (1 - alpha) * mean_B,
+  SD = sqrt(alpha^2 * var_A + (1 - alpha)^2 * var_B +
+              2 * alpha * (1 - alpha) * cov_AB)
+)
+p_e + geom_path(data = frontier3, color = "blue", linewidth = 0.8)
+```
+
+### I.4
+
+```{r three-stock-minimum}
+z_min3 <- solve(Sigma3, rep(1, 3))
+w_min3 <- z_min3 / sum(z_min3)
+mean_min3 <- sum(w_min3 * mu3)
+sd_min3 <- sqrt(drop(t(w_min3) %*% Sigma3 %*% w_min3))
+kable(data.frame(Stock = stocks3, Weight = w_min3),
+      digits = 4, row.names = FALSE)
+kable(data.frame(Mean = mean_min3, SD = sd_min3), digits = 6)
+```

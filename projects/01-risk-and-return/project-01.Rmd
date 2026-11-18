@@ -1,0 +1,100 @@
+---
+title: "Stats C183 Project 1 - Output File"
+author: 'Eli Radparvar UID: 206097071'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 7, fig.height = 5)
+library(ggplot2)
+library(knitr)
+```
+
+### A
+
+```{r stocks}
+stocks <- c(
+  # Technology
+  "MSFT", "ORCL", "ADBE", "CRM", "QCOM", "TXN",
+  # Healthcare
+  "JNJ", "MRK", "ABBV", "AMGN", "GILD", "MDT",
+  # Financial Services
+  "JPM", "BAC", "GS", "MS", "BLK", "AXP",
+  # Industrials
+  "CAT", "DE", "HON", "UNP", "UPS", "LMT",
+  # Consumer Defensive
+  "COST", "PEP", "PG", "KO", "WMT", "MDLZ"
+)
+tickers <- c("^GSPC", stocks)
+```
+
+### B
+
+```{r returns}
+a <- read.csv("../../data/stockData.csv", check.names = FALSE)
+a$Date <- as.Date(a$Date)
+a <- a[a$Date >= as.Date("2018-01-01") &
+         a$Date < as.Date("2023-01-01"), ]
+prices <- as.matrix(a[, tickers])
+r <- prices[-1, ] / prices[-nrow(prices), ] - 1
+```
+
+### C
+
+```{r statistics}
+means <- colMeans(r)
+covmat <- cov(r)
+stdev <- sqrt(diag(covmat))
+kable(cbind(`Mean monthly return` = means,
+                   `Monthly standard deviation` = stdev), digits = 4)
+```
+
+### D
+
+```{r assets}
+assets <- data.frame(Asset = tickers, Mean = means, SD = stdev)
+p <- ggplot(assets, aes(x = 100 * SD, y = 100 * Mean)) +
+  geom_point() +
+  geom_text(aes(label = Asset), vjust = -0.7, size = 3,
+            check_overlap = TRUE) +
+  scale_x_continuous(limits = c(0, NA)) +
+  labs(x = "Monthly standard deviation (%)",
+       y = "Mean monthly return (%)") +
+  theme_minimal()
+p
+```
+
+### E
+
+```{r equal-allocation}
+stock_means <- means[stocks]
+Sigma <- covmat[stocks, stocks]
+w_equal <- rep(1 / 30, 30)
+mean_equal <- sum(w_equal * stock_means)
+sd_equal <- sqrt(drop(t(w_equal) %*% Sigma %*% w_equal))
+kable(data.frame(Mean = mean_equal, SD = sd_equal), digits = 4)
+
+p_equal <- p +
+  annotate("point", x = 100 * sd_equal, y = 100 * mean_equal,
+           shape = 17, size = 4) +
+  annotate("text", x = 100 * sd_equal, y = 100 * mean_equal,
+           label = "Equal allocation", hjust = 1.1, vjust = -0.8, size = 3)
+p_equal
+```
+
+### F
+
+```{r minimum-risk}
+z <- solve(Sigma, rep(1, 30))
+w_min <- z / sum(z)
+mean_min <- sum(w_min * stock_means)
+sd_min <- sqrt(drop(t(w_min) %*% Sigma %*% w_min))
+kable(data.frame(Mean = mean_min, SD = sd_min), digits = 4)
+
+p_equal +
+  annotate("point", x = 100 * sd_min, y = 100 * mean_min,
+           shape = 18, size = 4) +
+  annotate("text", x = 100 * sd_min, y = 100 * mean_min,
+           label = "Minimum risk", vjust = 1.8, size = 3)
+```

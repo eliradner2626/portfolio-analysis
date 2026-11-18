@@ -1,0 +1,82 @@
+---
+title: "Stats C183 Project 4 - Output File"
+author: 'Eli Radparvar UID: 206097071'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 7, fig.height = 4.5)
+options(width = 75)
+library(ggplot2)
+library(knitr)
+```
+
+### A
+
+```{r single-index-estimates}
+a <- read.csv("../../data/stockData.csv", check.names = FALSE)
+a$Date <- as.Date(a$Date)
+a <- a[a$Date >= as.Date("2018-01-01") &
+         a$Date < as.Date("2023-01-01"), ]
+stocks <- setdiff(names(a), c("Date", "^GSPC"))
+prices <- as.matrix(a[, c("^GSPC", stocks)])
+r <- prices[-1, ] / prices[-nrow(prices), ] - 1
+market <- r[, "^GSPC"]
+
+alpha <- beta <- residual_var <- numeric(30)
+for (i in seq_along(stocks)) {
+  fit <- lm(r[, stocks[i]] ~ market)
+  alpha[i] <- coef(fit)[1]
+  beta[i] <- coef(fit)[2]
+  residual_var[i] <- summary(fit)$sigma^2
+}
+kable(data.frame(Stock = stocks, Alpha = alpha, Beta = beta,
+                 Residual_variance = residual_var),
+      digits = 6, row.names = FALSE)
+```
+
+### B
+
+```{r single-index-covariance}
+Sigma_index <- outer(beta, beta) * var(market) + diag(residual_var)
+dimnames(Sigma_index) <- list(stocks, stocks)
+round(Sigma_index, 6)
+```
+
+### C
+
+```{r compare-frontiers}
+mu <- alpha + beta * mean(market)
+covariances <- list(Historical = cov(r[, stocks]),
+                    "Single index" = Sigma_index)
+curves <- list()
+sd_max <- 1.05 * max(sqrt(diag(cov(r))))
+
+for (model in names(covariances)) {
+  Sigma <- covariances[[model]]
+  u <- solve(Sigma, mu)
+  v <- solve(Sigma, rep(1, 30))
+  A <- sum(u)
+  B <- sum(mu * u)
+  C <- sum(v)
+  D <- B * C - A^2
+  sd_grid <- seq(sqrt(1 / C), sd_max, length.out = 500)
+  offset <- sqrt((D / C) * pmax(sd_grid^2 - 1 / C, 0))
+  curves[[model]] <- data.frame(
+    SD = rep(sd_grid, 2),
+    Mean = c(A / C + offset, A / C - offset),
+    Branch = rep(c("Efficient", "Inefficient"), each = 500),
+    Model = model
+  )
+}
+frontiers <- do.call(rbind, curves)
+ggplot(frontiers, aes(x = 100 * SD, y = 100 * Mean,
+                     color = Model, linetype = Branch)) +
+  geom_path() +
+  scale_linetype_manual(values = c(Efficient = "solid",
+                                  Inefficient = "dashed")) +
+  labs(x = "Monthly standard deviation (%)",
+       y = "Mean monthly return (%)", linetype = "Frontier") +
+  theme_minimal()
+```

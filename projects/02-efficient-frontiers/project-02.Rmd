@@ -1,0 +1,161 @@
+---
+title: "Stats C183 Project 2 - Output File"
+author: 'Eli Radparvar UID: 206097071'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 7, fig.height = 4.5)
+library(ggplot2)
+library(knitr)
+```
+
+### A
+
+```{r constants}
+a <- read.csv("../../data/stockData.csv", check.names = FALSE)
+a$Date <- as.Date(a$Date)
+a <- a[a$Date >= as.Date("2018-01-01") &
+         a$Date < as.Date("2023-01-01"), ]
+stocks <- setdiff(names(a), c("Date", "^GSPC"))
+tickers <- c("^GSPC", stocks)
+prices <- as.matrix(a[, tickers])
+r <- prices[-1, ] / prices[-nrow(prices), ] - 1
+means <- colMeans(r)
+covmat <- cov(r)
+mu <- means[stocks]
+Sigma <- covmat[stocks, stocks]
+
+one <- rep(1, 30)
+u <- solve(Sigma, mu)
+v <- solve(Sigma, one)
+A <- sum(u)
+B <- sum(mu * u)
+C <- sum(v)
+D <- B * C - A^2
+kable(data.frame(A, B, C, D), digits = 4)
+```
+
+### B
+
+```{r multipliers}
+E <- 0.015
+# Merton's convention: minimize (1/2) w' Sigma w.
+lambda1 <- (C * E - A) / D
+lambda2 <- (B - A * E) / D
+kable(data.frame(E, A_over_C = A / C, lambda1, lambda2), digits = 6)
+```
+
+### C
+
+```{r target-portfolio}
+w_E <- lambda1 * u + lambda2 * v
+mean_E <- sum(w_E * mu)
+sd_E <- sqrt(drop(t(w_E) %*% Sigma %*% w_E))
+kable(data.frame(Stock = stocks, Weight = w_E),
+      digits = 4, row.names = FALSE)
+kable(data.frame(Mean = mean_E, SD = sd_E), digits = 4)
+```
+
+### D
+
+```{r parabola}
+E_grid <- seq(-0.01, 0.04, length.out = 500)
+frontier <- data.frame(
+  Mean = E_grid,
+  Variance = (C * E_grid^2 - 2 * A * E_grid + B) / D
+)
+p_d <- ggplot(frontier, aes(x = Variance, y = Mean)) +
+  geom_path() +
+  labs(x = "Monthly variance", y = "Mean monthly return") +
+  theme_minimal()
+p_d
+```
+
+### E
+
+```{r hyperbola}
+sd_grid <- seq(sqrt(1 / C), 1.05 * max(sqrt(diag(covmat))),
+               length.out = 500)
+offset <- sqrt((D / C) * pmax(sd_grid^2 - 1 / C, 0))
+hyperbola <- data.frame(
+  SD = rep(sd_grid, 2),
+  Mean = c(A / C + offset, A / C - offset),
+  Branch = rep(c("Efficient", "Inefficient"), each = 500)
+)
+p_e <- ggplot(hyperbola, aes(x = 100 * SD, y = 100 * Mean)) +
+  geom_path(aes(linetype = Branch)) +
+  scale_linetype_manual(values = c(Efficient = "solid",
+                                  Inefficient = "dashed")) +
+  labs(x = "Monthly standard deviation (%)",
+       y = "Mean monthly return (%)", linetype = "Frontier") +
+  theme_minimal()
+p_e
+```
+
+### F
+
+```{r assets-and-portfolios}
+w_equal <- rep(1 / 30, 30)
+w_min <- v / C
+portfolios <- data.frame(
+  Asset = c("Equal allocation", "Minimum risk", "Target E"),
+  Mean = c(sum(w_equal * mu), sum(w_min * mu), mean_E),
+  SD = c(sqrt(drop(t(w_equal) %*% Sigma %*% w_equal)),
+         sqrt(drop(t(w_min) %*% Sigma %*% w_min)), sd_E)
+)
+assets <- data.frame(Asset = tickers, Mean = means,
+                     SD = sqrt(diag(covmat)))
+p_f <- p_e +
+  geom_point(data = assets) +
+  geom_text(data = assets, aes(label = Asset),
+            vjust = -0.7, size = 2.5, check_overlap = TRUE) +
+  geom_point(data = portfolios, aes(shape = Asset, color = Asset),
+             size = 3) +
+  labs(shape = "Portfolio", color = "Portfolio") +
+  coord_cartesian(ylim = c(-0.5, 2.7)) +
+  theme(legend.position = "bottom")
+p_f
+```
+
+### G
+
+```{r arbitrary-portfolios}
+# Equal weights within Technology, Healthcare, and Industrials.
+W <- matrix(0, nrow = 30, ncol = 3)
+W[1:6, 1] <- 1 / 6
+W[7:12, 2] <- 1 / 6
+W[19:24, 3] <- 1 / 6
+arbitrary <- data.frame(
+  Asset = c("P1", "P2", "P3"),
+  Mean = drop(t(mu) %*% W),
+  SD = sqrt(diag(t(W) %*% Sigma %*% W))
+)
+kable(arbitrary, digits = 4, row.names = FALSE)
+p_f +
+  geom_point(data = arbitrary, color = "blue", shape = 15, size = 3) +
+  geom_text(data = arbitrary, aes(label = Asset),
+            color = "blue", hjust = c(-0.3, 1.3, 1.3),
+            vjust = c(-1, 1, 2), size = 3)
+```
+
+### H
+
+```{r two-fund-frontier}
+E2 <- 0.02
+w2 <- ((C * E2 - A) / D) * u + ((B - A * E2) / D) * v
+mix_returns <- seq(A / C, max(hyperbola$Mean), length.out = 500)
+alpha <- (mix_returns - E2) / (E - E2)
+mix_weights <- outer(w_E, alpha) + outer(w2, 1 - alpha)
+mix <- data.frame(
+  Mean = drop(t(mu) %*% mix_weights),
+  SD = sqrt(colSums(mix_weights * (Sigma %*% mix_weights)))
+)
+p_e +
+  geom_path(data = mix, color = "red", linetype = "dashed") +
+  labs(title = "Two-portfolio frontier (red dashed)")
+```
+
+Combining the portfolios with monthly expected returns of 1.5% and 2.0%
+reproduces the efficient branch in E.

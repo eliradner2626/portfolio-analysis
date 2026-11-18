@@ -1,0 +1,85 @@
+---
+title: "Stats C183 Project 5 - Output File"
+author: 'Eli Radparvar UID: 206097071'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+options(width = 75)
+library(knitr)
+```
+
+### A
+
+```{r tangency-portfolio}
+a <- read.csv("../../data/stockData.csv", check.names = FALSE)
+a$Date <- as.Date(a$Date)
+stocks <- setdiff(names(a), c("Date", "^GSPC"))
+tickers <- c("^GSPC", stocks)
+a1 <- a[a$Date >= as.Date("2018-01-01") &
+          a$Date < as.Date("2023-01-01"), ]
+prices1 <- as.matrix(a1[, tickers])
+r1 <- prices1[-1, ] / prices1[-nrow(prices1), ] - 1
+market1 <- r1[, "^GSPC"]
+
+alpha1 <- beta1 <- residual_var <- var_beta1 <- numeric(30)
+for (i in seq_along(stocks)) {
+  fit <- lm(r1[, stocks[i]] ~ market1)
+  alpha1[i] <- coef(fit)[1]
+  beta1[i] <- coef(fit)[2]
+  residual_var[i] <- summary(fit)$sigma^2
+  var_beta1[i] <- vcov(fit)[2, 2]
+}
+
+keep <- beta1 > 0
+Sigma <- outer(beta1[keep], beta1[keep]) * var(market1) +
+  diag(residual_var[keep])
+mu <- alpha1[keep] + beta1[keep] * mean(market1)
+Rf <- 0.001
+R <- mu - Rf
+Z <- solve(Sigma, R)
+w_G <- Z / sum(Z)
+mean_G <- sum(w_G * mu)
+sd_G <- sqrt(drop(t(w_G) %*% Sigma %*% w_G))
+kable(data.frame(Stock = stocks[keep], Beta = beta1[keep],
+                 Weight = w_G), digits = 6, row.names = FALSE)
+kable(data.frame(Rf, Mean = mean_G, SD = sd_G), digits = 6)
+```
+
+### B
+
+```{r beta-adjustments}
+a2 <- a[a$Date >= as.Date("2023-01-01") &
+          a$Date <= as.Date("2026-09-30"), ]
+prices2 <- as.matrix(a2[, tickers])
+r2 <- prices2[-1, ] / prices2[-nrow(prices2), ] - 1
+market2 <- r2[, "^GSPC"]
+beta2 <- numeric(30)
+for (i in seq_along(stocks)) {
+  fit <- lm(r2[, stocks[i]] ~ market2)
+  beta2[i] <- coef(fit)[2]
+}
+
+# Blume: forecast betas for the period after September 2026.
+blume <- lm(beta2 ~ beta1)
+beta_blume <- coef(blume)[1] + coef(blume)[2] * beta2
+coef(blume)
+
+# Vasicek: forecast betas for January 2023-September 2026.
+beta_mean <- mean(beta1)
+beta_var <- var(beta1)
+beta_vasicek <- (var_beta1 * beta_mean + beta_var * beta1) /
+  (beta_var + var_beta1)
+kable(data.frame(Stock = stocks, Beta1 = beta1, Beta2 = beta2,
+                 Blume = beta_blume, Vasicek = beta_vasicek),
+      digits = 6, row.names = FALSE)
+```
+
+### C
+
+```{r vasicek-press}
+# Mean squared beta prediction error.
+PRESS <- sum((beta_vasicek - beta2)^2) / length(stocks)
+kable(data.frame(PRESS), digits = 6)
+```
